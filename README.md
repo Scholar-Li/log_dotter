@@ -37,3 +37,12 @@ This image is configurable using different flags
 | time                 | 1000       | log cron time (ms)                                                                                          |
 | timeout              | 60         | log cron timeout (minute)                                                                                   |
 | port                 | 9094       | Addresses port using of server                                                                              |
+
+API
+---
+
+### Metrics
+
+```
+http://localhost:9094/metrics
+```
