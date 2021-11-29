@@ -31,8 +31,8 @@ type Dotter struct {
 }
 
 func (d *Dotter) Restart(ctx context.Context, interval, timeout uint64) {
-	d.ctx, d.cancel = context.WithTimeout(ctx, time.Minute * time.Duration(timeout))
-	d.t = time.Tick(time.Duration(interval) * time.Millisecond)
+	d.ctx, d.cancel = context.WithTimeout(ctx, time.Minute*time.Duration(timeout))
+	d.t = time.Tick(time.Duration(interval) * time.Second)
 
 	d.Interval = interval
 	d.Timeout = timeout
@@ -40,12 +40,13 @@ func (d *Dotter) Restart(ctx context.Context, interval, timeout uint64) {
 	go d.startCron()
 }
 
-func (d *Dotter) Tick() <-chan time.Time{
+func (d *Dotter) Tick() <-chan time.Time {
 	return d.t
 }
 
-func (d *Dotter) startCron()  {
+func (d *Dotter) startCron() {
 	zap.L().Info("dotter server is started.")
+	l := zap.L()
 	for {
 		select {
 		case <-d.ctx.Done():
@@ -54,10 +55,13 @@ func (d *Dotter) startCron()  {
 		case <-d.Tick():
 		}
 
-		// Random generation was not used
-		// because avoiding the generation of random data might affect the actual time of logging
-		zap.L().Info("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-		logTotal.Inc()
+		// max 170*1000
+		for i := 0; i < 150000; i++ {
+			// Random generation was not used
+			// because avoiding the generation of random data might affect the actual time of logging
+			l.Info("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+			logTotal.Inc()
+		}
 	}
 }
 
@@ -81,7 +85,7 @@ func (l *LogWriter) Write(d []byte) (n int, err error) {
 	return len(d), nil
 }
 
-type NullWriter struct {}
+type NullWriter struct{}
 
 func (l *NullWriter) Write(d []byte) (n int, err error) {
 	return len(d), nil
@@ -149,7 +153,7 @@ func NewGinEngine(out io.Writer, logLevel string) *gin.Engine {
 	e := gin.New()
 	if logLevel == "debug" {
 		gin.SetMode(gin.DebugMode)
-		out  = os.Stdout
+		out = os.Stdout
 	}
 
 	e.Use(gin.RecoveryWithWriter(out))
@@ -159,7 +163,7 @@ func NewGinEngine(out io.Writer, logLevel string) *gin.Engine {
 	return e
 }
 
-func CheckParamsIsValid () gin.HandlerFunc{
+func CheckParamsIsValid() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		paramsMap := make(map[string]string)
 		for _, param := range ctx.Params {
@@ -179,7 +183,6 @@ func CheckParamsIsValid () gin.HandlerFunc{
 	}
 }
 
-
 var (
 	httpEnable     bool
 	logDevelopment bool
@@ -193,7 +196,7 @@ func ParseFlags() {
 	flag.BoolVar(&httpEnable, "http", false, "start http.")
 	flag.BoolVar(&logDevelopment, "development", false, "set log development.")
 	flag.StringVar(&logLevel, "level", "info", "set log level.")
-	flag.Uint64Var(&logInterval, "interval", 1000, "set log cron interval time (ms).")
+	flag.Uint64Var(&logInterval, "interval", 1000, "set log cron interval time (s).")
 	flag.Uint64Var(&logTimeOut, "timeout", 60, "set log cron timeout (minute).")
 	flag.StringVar(&logFile, "file", "", "log file name with path.")
 	flag.Parse()
@@ -206,7 +209,7 @@ var (
 	})
 )
 
-func SyncStartWithHTTP(ctx context.Context, cancel context.CancelFunc)  {
+func SyncStartWithHTTP(ctx context.Context, cancel context.CancelFunc) {
 	mainCtx := ctx
 
 	engine := NewGinEngine(&NullWriter{}, logLevel)
@@ -260,7 +263,7 @@ func SyncStartWithHTTP(ctx context.Context, cancel context.CancelFunc)  {
 	}()
 }
 
-func SyncStartWithShellTimeOut(ctx context.Context, cancel context.CancelFunc, interval, timeout uint64)  {
+func SyncStartWithShellTimeOut(ctx context.Context, cancel context.CancelFunc, interval, timeout uint64) {
 	go func() {
 		dotter.Restart(ctx, interval, timeout)
 		time.Sleep(time.Minute * time.Duration(dotter.Timeout))
