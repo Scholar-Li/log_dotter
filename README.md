@@ -1,7 +1,7 @@
 log_dotter
 ==============
 
-Used to test the log collection function.
+Used to test the log collection function. Generate 15w logs at a time.
 
 Docker Hub Image
 ----------------
@@ -34,8 +34,8 @@ This image is configurable using different flags
 
 | Flag name                    | Default    | Description                                                                                         |
 | ---------------------------- | ---------- | --------------------------------------------------------------------------------------------------- |
-| http                         | false      | log cron interval time (ms)                                                                         |
-| interval                     | 1000       | log cron interval time (ms)                                                                         |
+| http                         | false      | start http                                                                         |
+| interval                     | 1000       | log cron interval time (s)                                                                         |
 | timeout                      | 60         | log cron timeout (minute)                                                                           |
 | port                         | 9094       | Addresses port using of server                                                                      |
 | file                         |            | log file path                                                                                       |
