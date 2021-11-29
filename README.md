@@ -24,7 +24,7 @@ log_dotter -timeout 60 -time 1000
 ### Run Docker Image
 
 ```
-docker run -p 9094:9094 scholarli/log_dotter -timeout 60 -time 1000
+docker run -p 9093:9093 -p 9094:9094 scholarli/log_dotter
 ```
 
 Flags
@@ -34,10 +34,11 @@ This image is configurable using different flags
 
 | Flag name                    | Default    | Description                                                                                         |
 | ---------------------------- | ---------- | --------------------------------------------------------------------------------------------------- |
-| time                 | 1000       | log cron time (ms)                                                                                          |
-| timeout              | 60         | log cron timeout (minute)                                                                                   |
-| port                 | 9094       | Addresses port using of server                                                                              |
-| file                 |            | log file path                                                                                               |
+| http                         | false      | log cron interval time (ms)                                                                         |
+| interval                     | 1000       | log cron interval time (ms)                                                                         |
+| timeout                      | 60         | log cron timeout (minute)                                                                           |
+| port                         | 9094       | Addresses port using of server                                                                      |
+| file                         |            | log file path                                                                                       |
 
 API
 ---
@@ -46,4 +47,26 @@ API
 
 ```
 http://localhost:9094/metrics
+```
+
+### operate
+
+#### Reset
+```shell
+curl --location --request POST '127.0.0.1:9093/reset' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+    "timeout": 60,
+    "interval": 1
+}'
+```
+
+#### Get
+```shell
+curl --location --request GET '127.0.0.1:9093/config'
+```
+
+#### Stop
+```shell
+curl --location --request POST '127.0.0.1:9093/stop'
 ```

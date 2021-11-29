@@ -4,11 +4,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/natefinch/lumberjack"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -19,31 +21,47 @@ import (
 
 const server = "log_dotter"
 
-var (
-	logDevelopment bool
-	logLevel       string
-	logTime        uint64
-	logTimeOut     uint64
-	serverPort     uint64
-	logFile        string
-)
+type Dotter struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	t      <-chan time.Time
 
-func ParseFlags() {
-	flag.BoolVar(&logDevelopment, "development", false, "set log development.")
-	flag.StringVar(&logLevel, "level", "info", "set log level.")
-	flag.Uint64Var(&logTime, "time", 1000, "set log cron time (ms).")
-	flag.Uint64Var(&logTimeOut, "timeout", 60, "set log cron timeout (minute).")
-	flag.Uint64Var(&serverPort, "port", 9094, "server port.")
-	flag.StringVar(&logFile, "file", "", "log file name with path.")
-	flag.Parse()
+	Timeout  uint64 `json:"timeout"`  // set log cron timeout (minute)
+	Interval uint64 `json:"interval"` // set log cron interval time (ms)
 }
 
-var (
-	logTotal = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "cron_log_total",
-		Help: "The total number of cron log",
-	})
-)
+func (d *Dotter) Restart(ctx context.Context, interval, timeout uint64) {
+	d.ctx, d.cancel = context.WithTimeout(ctx, time.Minute * time.Duration(timeout))
+	d.t = time.Tick(time.Duration(interval) * time.Millisecond)
+
+	d.Interval = interval
+	d.Timeout = timeout
+
+	go d.startCron()
+}
+
+func (d *Dotter) Tick() <-chan time.Time{
+	return d.t
+}
+
+func (d *Dotter) startCron()  {
+	zap.L().Info("dotter server is started.")
+	for {
+		select {
+		case <-d.ctx.Done():
+			zap.L().Info("dotter server is stopped with timeout.")
+			return
+		case <-d.Tick():
+		}
+
+		// Random generation was not used
+		// because avoiding the generation of random data might affect the actual time of logging
+		zap.L().Info("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+		logTotal.Inc()
+	}
+}
+
+var dotter = Dotter{}
 
 type LogFileCfg struct {
 	Filename   string // File Name with path
@@ -51,6 +69,22 @@ type LogFileCfg struct {
 	MaxBackups int    // Number of backups
 	MaxAge     int    // Storage days
 	Compress   bool
+}
+
+type LogWriter struct {
+	*zap.SugaredLogger
+}
+
+func (l *LogWriter) Write(d []byte) (n int, err error) {
+
+	l.Info(string(d))
+	return len(d), nil
+}
+
+type NullWriter struct {}
+
+func (l *NullWriter) Write(d []byte) (n int, err error) {
+	return len(d), nil
 }
 
 func NewLogger(fileCfg *LogFileCfg, development bool, level string, opts ...zap.Option) (*zap.Logger, error) {
@@ -110,23 +144,128 @@ func NewLogger(fileCfg *LogFileCfg, development bool, level string, opts ...zap.
 	return l, nil
 }
 
-func CronLog(ctx context.Context, d time.Duration)  {
-	tick := time.Tick(d)
+func NewGinEngine(out io.Writer, logLevel string) *gin.Engine {
+	gin.SetMode(gin.ReleaseMode)
+	e := gin.New()
+	if logLevel == "debug" {
+		gin.SetMode(gin.DebugMode)
+		out  = os.Stdout
+	}
 
-	subCtx, _ := context.WithCancel(ctx)
-	for {
-		select {
-		case <-subCtx.Done():
-			zap.L().Info("server is stopped with timeout.")
+	e.Use(gin.RecoveryWithWriter(out))
+	e.Use(gin.LoggerWithWriter(out))
+	e.Use(CheckParamsIsValid())
+
+	return e
+}
+
+func CheckParamsIsValid () gin.HandlerFunc{
+	return func(ctx *gin.Context) {
+		paramsMap := make(map[string]string)
+		for _, param := range ctx.Params {
+			paramsMap[param.Key] = param.Value
+			if param.Value == "" {
+				ctx.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("params[%s] is required!", param.Key)})
+				ctx.Abort()
+				return
+			}
+
+			//if strings.Contains(param.Value, " ") {
+			//	ctx.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("[%s] cannot contain spaces!", param.Key)})
+			//	ctx.Abort()
+			//	return
+			//}
+		}
+	}
+}
+
+
+var (
+	httpEnable     bool
+	logDevelopment bool
+	logLevel       string
+	logInterval    uint64
+	logTimeOut     uint64
+	logFile        string
+)
+
+func ParseFlags() {
+	flag.BoolVar(&httpEnable, "http", false, "start http.")
+	flag.BoolVar(&logDevelopment, "development", false, "set log development.")
+	flag.StringVar(&logLevel, "level", "info", "set log level.")
+	flag.Uint64Var(&logInterval, "interval", 1000, "set log cron interval time (ms).")
+	flag.Uint64Var(&logTimeOut, "timeout", 60, "set log cron timeout (minute).")
+	flag.StringVar(&logFile, "file", "", "log file name with path.")
+	flag.Parse()
+}
+
+var (
+	logTotal = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "cron_log_total",
+		Help: "The total number of cron log",
+	})
+)
+
+func SyncStartWithHTTP(ctx context.Context, cancel context.CancelFunc)  {
+	mainCtx := ctx
+
+	engine := NewGinEngine(&NullWriter{}, logLevel)
+	//engine := NewGinEngine(&LogWriter{zap.S()}, logLevel)
+	//engine := gin.Default()
+
+	engine.GET("/config", func(ctx *gin.Context) {
+		if dotter.ctx == nil {
+			ctx.JSON(http.StatusOK, gin.H{
+				"deadline": "",
+				"interval": "",
+			})
 			return
-		case <-tick:
+		}
+		deadline, _ := dotter.ctx.Deadline()
+		ctx.JSON(http.StatusOK, gin.H{
+			"deadline": deadline,
+			"interval": dotter.Interval,
+		})
+	})
+
+	engine.POST("/reset", func(ctx *gin.Context) {
+		req := Dotter{}
+		err := ctx.BindJSON(&req)
+		if err != nil {
+			ctx.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			return
 		}
 
-		// Random generation was not used
-		// because avoiding the generation of random data might affect the actual time of logging
-		zap.L().Info("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-		logTotal.Inc()
-	}
+		if req.Timeout == 0 || req.Interval == 0 {
+			ctx.JSON(http.StatusBadRequest, gin.H{"message": "timeout, interval is required"})
+			return
+		}
+
+		dotter.Restart(mainCtx, req.Interval, req.Timeout)
+		logTotal.Set(0)
+		ctx.JSON(http.StatusOK, gin.H{"message": "success"})
+	})
+
+	engine.POST("/stop", func(ctx *gin.Context) {
+		dotter.cancel()
+		ctx.JSON(http.StatusOK, gin.H{"message": "success"})
+	})
+
+	go func() {
+		err := http.ListenAndServe(fmt.Sprintf("0.0.0.0:%d", 9093), engine)
+		if err != nil {
+			zap.S().Panic("failed to listen and serve http server.", zap.Error(err))
+			cancel()
+		}
+	}()
+}
+
+func SyncStartWithShellTimeOut(ctx context.Context, cancel context.CancelFunc, interval, timeout uint64)  {
+	go func() {
+		dotter.Restart(ctx, interval, timeout)
+		time.Sleep(time.Minute * time.Duration(dotter.Timeout))
+		cancel()
+	}()
 }
 
 func main() {
@@ -152,10 +291,7 @@ func main() {
 	l.With(zap.String("name", server))
 	zap.ReplaceGlobals(l)
 
-	l.Info("server is started.")
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute * time.Duration(logTimeOut))
-
-	go CronLog(ctx, time.Millisecond * time.Duration(logTime))
+	ctx, cancel := context.WithCancel(context.Background())
 
 	http.Handle("/metrics", promhttp.Handler())
 	go func() {
@@ -165,6 +301,12 @@ func main() {
 			cancel()
 		}
 	}()
+
+	if httpEnable {
+		SyncStartWithHTTP(ctx, cancel)
+	} else {
+		SyncStartWithShellTimeOut(ctx, cancel, logInterval, logTimeOut)
+	}
 
 	select {
 	case <-ctx.Done():
